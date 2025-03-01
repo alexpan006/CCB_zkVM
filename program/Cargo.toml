@@ -1,0 +1,13 @@
+[package]
+name = "bitcoin_verify_program"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-zkvm = { version = "0.2", features = ["std"] }  # Latest SP1 zkVM version as of mid-2024
+bincode = "1.3"  # For serialization/deserialization of structs
+alloy-sol-types = "0.6"  # Optional, for Solana/Ethereum compatibility if needed
+
+[profile.release]
+opt-level = 3  # Optimize for performance in zkVM
+lto = true     # Link-time optimization for smaller ELF
