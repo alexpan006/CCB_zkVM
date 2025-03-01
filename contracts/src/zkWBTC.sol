@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
+import {ISP1Verifier} from "contracts/lib/sp1-contracts/contracts/src/ISP1Verifier.sol";
 
 // Define struct matching zkVM PublicValues
 struct PublicValuesStruct {
@@ -24,13 +24,12 @@ contract zkWBTC {
         public
         returns (bool)
     {
-        // Verify proof with SP1 verifier
-        (bool success, ) = ISP1Verifier(verifier).verifyProof(
+        ISP1Verifier(verifier).verifyProof(
             bitcoinVerifierProgramVKey,
             _publicValues,
             _proofBytes
         );
-        if (!success) revert("Proof verification failed");
+        // Verify proof with SP1 verifier
 
         // Decode public values
         PublicValuesStruct memory publicValues = abi.decode(_publicValues, (PublicValuesStruct));
