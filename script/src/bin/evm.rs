@@ -9,18 +9,15 @@
 //! ```shell
 //! RUST_LOG=info cargo run --release --bin evm -- --system plonk
 //! ```
+use lib_struct::{BitcoinTrxInfoStruct, BundleInfoStruct, EthProofFixture, RequestInfoStruct};
+// ELF file for the Bitcoin transaction verification zkVM program (assumes compiled from your zkVM code)
+pub const BITCOIN_VERIFY_ELF: &[u8] = include_elf!("bitcoin_verify_program");
 
-use alloy_sol_types::SolType;
 use clap::{Parser, ValueEnum};
-use fibonacci_lib::PublicValuesStruct;
-use serde::{Deserialize, Serialize};
 use sp1_sdk::{
     include_elf, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1Stdin, SP1VerifyingKey,
 };
 use std::path::PathBuf;
-
-/// The ELF (executable and linkable format) file for the Succinct RISC-V zkVM.
-pub const FIBONACCI_ELF: &[u8] = include_elf!("fibonacci-program");
 
 /// The arguments for the EVM command.
 #[derive(Parser, Debug)]
@@ -39,18 +36,6 @@ enum ProofSystem {
     Groth16,
 }
 
-/// A fixture that can be used to test the verification of SP1 zkVM proofs inside Solidity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SP1FibonacciProofFixture {
-    a: u32,
-    b: u32,
-    n: u32,
-    vkey: String,
-    public_values: String,
-    proof: String,
-}
-
 fn main() {
     // Setup the logger.
     sp1_sdk::utils::setup_logger();
@@ -62,13 +47,31 @@ fn main() {
     let client = ProverClient::from_env();
 
     // Setup the program.
-    let (pk, vk) = client.setup(FIBONACCI_ELF);
+    let (pk, vk) = client.setup(BITCOIN_VERIFY_ELF);
 
-    // Setup the inputs.
+    // Mock Bitcoin transaction input (replace with real Testnet data in practice)
+    let mock_tx = BitcoinTrxInfoStruct {
+        tx_id: "ea33a83a4121fd47ccba8ed634ffe6c850d95f9a0d37c4613780c2679f816455".into(), // Placeholder txID
+        amount: 10000,
+        to_address: "tb1qn05lrx8q5tajvnc6lc30sa8fzasjmey6fnl3p0".into(), // 1000 satoshis (0.00001 BTC)
+        confirmations: 8,                                                // 6 confirmations
+    };
+    // Mock Bitcoin transaction input (replace with real Testnet data in practice)
+    let mock_req = RequestInfoStruct {
+        depositer_bit_address: "ea33a83a4121fd47ccba8ed634ffe6c850d95f9a0d37c4613780c2679f816455"
+            .into(), // Placeholder txID
+        target_deposit_address: "tb1qn05lrx8q5tajvnc6lc30sa8fzasjmey6fnl3p0".into(), // 1000 satoshis (0.00001 BTC)
+        depositer_eth_address: "0xa86Ed347B8D1043533fe30c07Fc47f3E3b849a42".to_string(), // 6 confirmations
+        amount: 10000,
+    };
+
     let mut stdin = SP1Stdin::new();
-    stdin.write(&args.n);
+    let bundle_data = BundleInfoStruct {
+        bit_info: mock_tx,
+        req_info: mock_req,
+    };
+    stdin.write(&bundle_data);
 
-    println!("n: {}", args.n);
     println!("Proof System: {:?}", args.system);
 
     // Generate the proof based on the selected proof system.
@@ -87,17 +90,12 @@ fn create_proof_fixture(
     vk: &SP1VerifyingKey,
     system: ProofSystem,
 ) {
-    // Deserialize the public values.
     let bytes = proof.public_values.as_slice();
-    let PublicValuesStruct { n, a, b } = PublicValuesStruct::abi_decode(bytes, false).unwrap();
+    // let decoded = ETHPublicValuesStruct::abi_decode(bytes, false).unwrap();
 
-    // Create the testing fixture so we can test things end-to-end.
-    let fixture = SP1FibonacciProofFixture {
-        a,
-        b,
-        n,
+    let fixture = EthProofFixture {
         vkey: vk.bytes32().to_string(),
-        public_values: format!("0x{}", hex::encode(bytes)),
+        public_value: format!("0x{}", hex::encode(bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
     };
 
@@ -111,7 +109,7 @@ fn create_proof_fixture(
     //
     // If you need to expose the inputs or outputs of your program, you should commit them in
     // the public values.
-    println!("Public Values: {}", fixture.public_values);
+    println!("Public Values: {}", fixture.public_value);
 
     // The proof proves to the verifier that the program was executed with some inputs that led to
     // the give public values.

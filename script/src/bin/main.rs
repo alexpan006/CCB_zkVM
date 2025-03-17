@@ -2,28 +2,15 @@
 //! Run with:
 //! - Execution: `RUST_LOG=info cargo run --release -- --execute`
 //! - Proving: `RUST_LOG=info cargo run --release -- --prove`
-
+use alloy_sol_types::SolType;
 use clap::Parser;
+use lib_struct::{
+    BitcoinTrxInfoStruct, BundleInfoStruct, ETHPublicValuesStruct, RequestInfoStruct,
+};
 use sp1_sdk::{include_elf, ProverClient, SP1Stdin};
-
 // ELF file for the Bitcoin transaction verification zkVM program (assumes compiled from your zkVM code)
-pub const BITCOIN_VERIFY_ELF: &[u8] = include_elf!("bitcoin_verify");
-
+pub const BITCOIN_VERIFY_ELF: &[u8] = include_elf!("bitcoin_verify_program");
 // Structs for Bitcoin transaction data and public values (mirroring zkVM pseudocode)
-#[derive(bincode::Encode, bincode::Decode, Debug)]
-struct BitcoinTx {
-    tx_id: [u8; 32],          // Transaction ID (32 bytes)
-    amount: u64,              // BTC amount in satoshis
-    signatures: Vec<Vec<u8>>, // 2-of-3 multi-sig signatures (mocked)
-    confirmations: u32,       // Number of confirmations
-}
-
-#[derive(bincode::Encode, bincode::Decode, Debug)]
-struct PublicValues {
-    tx_id: [u8; 32], // Transaction ID
-    is_valid: bool,  // Validity flag
-}
-
 /// CLI arguments
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -52,57 +39,72 @@ fn main() {
     let client = ProverClient::from_env();
 
     // Mock Bitcoin transaction input (replace with real Testnet data in practice)
-    let mock_tx = BitcoinTx {
-        tx_id: [0u8; 32],                           // Placeholder txID
-        amount: 1000,                               // 1000 satoshis (0.00001 BTC)
-        signatures: vec![vec![1; 64], vec![2; 64]], // Mock 2 signatures
-        confirmations: 6,                           // 6 confirmations
+    let mock_tx = BitcoinTrxInfoStruct {
+        tx_id: "ea33a83a4121fd47ccba8ed634ffe6c850d95f9a0d37c4613780c2679f816455".into(), // Placeholder txID
+        amount: 10000,
+        to_address: "tb1qn05lrx8q5tajvnc6lc30sa8fzasjmey6fnl3p0".into(), // 1000 satoshis (0.00001 BTC)
+        confirmations: 8,                                                // 6 confirmations
+    };
+    // Mock Bitcoin transaction input (replace with real Testnet data in practice)
+    let mock_req = RequestInfoStruct {
+        depositer_bit_address: "ea33a83a4121fd47ccba8ed634ffe6c850d95f9a0d37c4613780c2679f816455"
+            .into(), // Placeholder txID
+        target_deposit_address: "tb1qn05lrx8q5tajvnc6lc30sa8fzasjmey6fnl3p0".into(), // 1000 satoshis (0.00001 BTC)
+        depositer_eth_address: "0xa86Ed347B8D1043533fe30c07Fc47f3E3b849a42".to_string(), // 6 confirmations
+        amount: 10000,
     };
 
-    // Setup inputs
-    let mut stdin = SP1Stdin::new();
-    let tx_bytes = bincode::serialize(&mock_tx).expect("Failed to serialize mock_tx");
-    stdin.write_vec(tx_bytes);
+    // RUST_LOG=info cargo run --release -- --execute
 
-    println!("Mock BitcoinTx: {:?}", mock_tx);
+    // Setup the inputs.
+    let mut stdin = SP1Stdin::new();
+    let bundle_data = BundleInfoStruct {
+        bit_info: mock_tx,
+        req_info: mock_req,
+    };
+    stdin.write(&bundle_data);
 
     if args.execute {
         // Execute the program
         let (output, report) = client.execute(BITCOIN_VERIFY_ELF, &stdin).run().unwrap();
-        println!("Program executed successfully.");
+        // let decode_output = ;
+        println!("Program executed successfully");
 
-        // Deserialize and read the output
-        let decoded: PublicValues =
-            bincode::deserialize(&output.as_slice()).expect("Failed to deserialize output");
-        println!(
-            "Output: tx_id={:?}, is_valid={}",
-            decoded.tx_id, decoded.is_valid
-        );
+        // -------------------------------------
+        // let decode_output = ;
+        // Read the output.
+        let decoded = ETHPublicValuesStruct::abi_decode(output.as_slice(), false).unwrap();
 
-        // Basic validation (for PoC)
-        assert_eq!(
-            decoded.is_valid, true,
-            "Verification failed for mock transaction"
-        );
-        println!("Verification result is correct!");
+        println!("Result is ");
 
-        // Report cycles
+        let ETHPublicValuesStruct {
+            tx_id,
+            depositer_address,
+            amount,
+            is_valid,
+        } = decoded;
+
+        println!("-------------------------------------------");
+        println!("tx_id: {}", tx_id);
+        println!("depositer eth address: {}", depositer_address);
+        println!("amount: {}", amount);
+        println!("is valid or not: {}", is_valid);
         println!("Number of cycles: {}", report.total_instruction_count());
     } else {
-        // Setup for proving
+        // Setup the program for proving.
         let (pk, vk) = client.setup(BITCOIN_VERIFY_ELF);
 
-        // Generate the proof (using PLONK for zkSync compatibility)
+        // Generate the proof
         let proof = client
             .prove(&pk, &stdin)
-            .plonk()
             .run()
-            .expect("Failed to generate proof");
+            .expect("failed to generate proof");
 
         println!("Successfully generated proof!");
 
-        // Verify the proof
-        client.verify(&proof, &vk).expect("Failed to verify proof");
+        // Verify the proof.
+        client.verify(&proof, &vk).expect("failed to verify proof");
         println!("Successfully verified proof!");
     }
+    println!("Finish");
 }
