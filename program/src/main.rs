@@ -1,56 +1,68 @@
 #![no_main]
 sp1_zkvm::entrypoint!(main);
-
-// Use bincode for serialization (common in zkVM contexts)
-use bincode::{deserialize, serialize};
+use alloy_primitives::{address, fixed_bytes, Address, FixedBytes, I256, U256};
+use alloy_sol_types::{sol, SolType};
+use lib_struct::{
+    BitcoinTrxInfoStruct, BundleInfoStruct, ETHPublicValuesStruct, RequestInfoStruct,
+};
+use serde::{Deserialize, Serialize};
 
 // Mock struct for Bitcoin transaction data (simplified PoC)
-#[derive(Debug, bincode::Encode, bincode::Decode)]
+#[derive(Deserialize, Serialize, Debug)]
 struct BitcoinTx {
-    tx_id: [u8; 32],          // Transaction ID (32 bytes)
-    amount: u64,              // BTC amount in satoshis
-    signatures: Vec<Vec<u8>>, // 2-of-3 multi-sig signatures (mocked)
-    confirmations: u32,       // Number of confirmations
-}
-
-// Struct for public values committed to zkSync
-#[derive(Debug, bincode::Encode, bincode::Decode)]
-struct PublicValues {
-    tx_id: [u8; 32], // Transaction ID
-    is_valid: bool,  // Validity flag
+    tx_id: [u8; 32],
+    amount: u64,
+    address: String, // Add destination address for verification
+    signatures: Vec<String>,
+    confirmations: u32,
+    sequence: u32, // Add for RBF check
 }
 
 // Verify a Bitcoin transaction (mocked for PoC)
-fn verify_bitcoin_tx(tx: BitcoinTx) -> bool {
-    // Check 1: Minimum 6 confirmations
-    if tx.confirmations < 6 {
+fn verify_bitcoin_tx(tx_info: &BitcoinTrxInfoStruct, tx_req: &RequestInfoStruct) -> bool {
+    // Check 1: Amount Check
+    print!("The amount is{} and {}", tx_info.amount, tx_req.amount);
+    if tx_info.amount != tx_req.amount {
         return false;
     }
-    // Check 2: Non-zero amount
-    if tx.amount == 0 {
+    // Check 2: Aaddress Check if the vout is our bitcoin address.
+    if tx_info.to_address != tx_req.target_deposit_address {
         return false;
     }
-    // Mocked success (real impl would verify signatures against pubkeys)
+    // Check 3: confirmations needs to be at least 6
+    if tx_info.confirmations < 6 {
+        return false;
+    }
     true
 }
 
 pub fn main() {
     // Read Bitcoin transaction as bytes and deserialize (PoC assumes struct input)
-    let tx_bytes = sp1_zkvm::io::read_vec();
-    let tx: BitcoinTx = deserialize(&tx_bytes).expect("Failed to deserialize tx");
+    // let tx_bytes = sp1_zkvm::io::read_vec();
+    // let tx: BitcoinTx = deserialize(&tx_bytes).expect("Failed to deserialize tx");
+
+    // let (tx_data, req_data): (BitcoinTrxInfoStruct, RequestInfoStruct) = sp1_zkvm::io::read();
+    let bundle: BundleInfoStruct = sp1_zkvm::io::read();
+    println!("Hello from the VM:{:?}", bundle);
 
     // Verify the transaction
-    let is_valid = verify_bitcoin_tx(tx);
-
+    let result = verify_bitcoin_tx(&bundle.bit_info, &bundle.req_info);
+    println!("The result is :{:?}", result);
+    // let tx_id_fixed = FixedBytes::from(&tx_data.tx_id);
     // Prepare public values
-    let public_values = PublicValues {
-        tx_id: tx.tx_id,
-        is_valid,
-    };
+    // let public_values = MyPublicValuesStruct {
+    //     tx_id: tx_id_fixed,
+    //     is_valid: result,
+    // };
 
-    // Serialize public values using bincode
-    let bytes = serialize(&public_values).expect("Failed to serialize public values");
-
+    // // Encode the public values of the program.
+    let bytes = ETHPublicValuesStruct::abi_encode(&ETHPublicValuesStruct {
+        tx_id: bundle.bit_info.tx_id.parse::<FixedBytes<32>>().unwrap(),
+        depositer_address: Address::parse_checksummed(bundle.req_info.depositer_eth_address, None)
+            .unwrap(),
+        amount: U256::from(bundle.req_info.amount),
+        is_valid: result,
+    });
     // Commit the public values for zkSync verification
-    sp1_zkvm::io::commit_slice(&bytes);
+    sp1_zkvm::io::commit(&bytes);
 }
