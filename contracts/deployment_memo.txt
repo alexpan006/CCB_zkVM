@@ -1,0 +1,16 @@
+forge create src/DWBTC.sol:DWBTC \
+  --zksync \
+  --rpc-url $ALCHEMY_API_KEY \
+  --private-key $PRIVATE_KEY \
+  --constructor-args $VERIFIER $VKEY
+
+forge create src/Test_DWBTC.sol:Test_DWBTC \
+  --zksync \
+  --rpc-url $ALCHEMY_API_KEY \
+  --private-key $PRIVATE_KEY \
+  --constructor-args $VERIFIER $VKEY
+
+forge create src/DWBTC.sol:DWBTC --rpc-url $ALCHEMY_API_KEY --private-key $PRIVATE_KEY --constructor-args $VERIFIER $VKEY
+
+
+  forge create src/Fibonacci.sol:Fibonacci --rpc-url $RPC_URL --private-key $PRIVATE_KEY --constructor-args $VERIFIER $PROGRAM_VKEY

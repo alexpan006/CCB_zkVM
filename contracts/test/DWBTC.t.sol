@@ -2,107 +2,124 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import {stdJson} from "forge-std/StdJson.sol";
-import "../src/DWBTC.sol"; // Adjust the path to your contract;
-import {SP1VerifierGateway} from "../lib/sp1-contracts/contracts/src/SP1VerifierGateway.sol";
-
-// Struct to match your expected JSON fixture format
-struct DWBTCProofFixtureJson {
-    bytes32 vkey;
-    bytes publicValue;
-    bytes proof;
-}
+import {ISP1Verifier} from "lib/sp1-contracts/contracts/src/ISP1Verifier.sol";
+import {DWBTC} from "../src/DWBTC.sol";
+import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 
 contract DWBTCTest is Test {
-    using stdJson for string;
-
     DWBTC public dwbtc;
-    address public verifier;
+    address public verifier = address(0x1234); // Mock verifier address
+    bytes32 public programVKey = keccak256("test_vkey");
+    address public user = address(0x5678);
 
-    // Load fixture from JSON file
-    function loadFixture() public view returns (DWBTCProofFixtureJson memory) {
-        string memory root = vm.projectRoot();
-        string memory path = string.concat(root, "/src/fixtures/plonk-fixture.json");
-        string memory json = vm.readFile(path);
-
-        DWBTCProofFixtureJson memory fixture;
-
-        // Parse each field individually
-        fixture.vkey = json.readBytes32(".vkey");
-        fixture.publicValue = json.readBytes(".publicValue");
-        fixture.proof = json.readBytes(".proof");
-
-        return fixture;    }
+    // Sample test data
+    bytes public validPublicValues;
+    bytes public validProof = hex"1234";
+    bytes32 public txId = keccak256("test_tx");
 
     function setUp() public {
-        DWBTCProofFixtureJson memory fixture = loadFixture();
-        
-        // Deploy a mock verifier (or use a real one if available)
-        verifier = address(new SP1VerifierGateway(address(1)));
-        dwbtc = new DWBTC(verifier, fixture.vkey);
+        dwbtc = new DWBTC(verifier, programVKey);
 
-
-
-    }
-
-    function test_ValidProof() public {
-        DWBTCProofFixtureJson memory fixture = loadFixture();
-
-        // Mock the verifier to accept the proof
-        vm.mockCall(
-            verifier,
-            abi.encodeWithSelector(SP1VerifierGateway.verifyProof.selector),
-            abi.encode(true) // Empty return as verifyProof returns nothing
+        // Encode valid public values
+        validPublicValues = abi.encode(
+            txId,              // bytes32
+            user,              // address
+            uint256(1000),     // amount
+            true               // is_valid
         );
 
-
-        // Test the proof verification
-        (bytes32 txId, address depositer, uint256 amount, bool isValid) = 
-            dwbtc.verifyBitTrxProof(fixture.publicValue, fixture.proof);
-
-        // Decode publicValue to verify
-        (bytes32 expectedTxId, address expectedDepositer, uint256 expectedAmount, bool expectedIsValid) = 
-            abi.decode(fixture.publicValue, (bytes32, address, uint256, bool));
-
-        // Verify returned values match fixture
-        assertEq(isValid, true, "Transaction is valid");
-        
-
+        // Mock successful proof verification
+        vm.mockCall(
+            verifier,
+            abi.encodeWithSelector(ISP1Verifier.verifyProof.selector, programVKey, validPublicValues, validProof),
+            abi.encode()
+        );
     }
 
-    // function testFail_InvalidProof() public {
-    //     DWBTCProofFixtureJson memory fixture = loadFixture();
+    function test_SuccessfulMint() public {
+    // Check event for first call
+    vm.expectEmit(true, true, false, true);
+    emit DWBTC.ProofVerifiedAndMinted(txId, user, 1000, true);
+    (bytes32 returnedTxId, address depositer, uint256 amount, bool isValid) = 
+        dwbtc.verifyAndMint(validPublicValues, validProof);
 
-    //     // Create a fake proof with same length but different content
-    //     bytes memory fakeProof = new bytes(fixture.proof.length);
+    assertEq(returnedTxId, txId, "Tx ID mismatch");
+    assertEq(depositer, user, "Depositer mismatch");
+    assertEq(amount, 1000, "Amount mismatch");
+    assertEq(isValid, true, "isValid mismatch");
+    assertEq(dwbtc.balanceOf(user), 1000, "Tokens not minted");
+    assertTrue(dwbtc.processedTxIds(txId), "Tx ID not marked as processed");
+    }
 
-    //     // Mock verifier to accept (so we can test our contract's logic separately)
-    //     vm.mockCall(
-    //         verifier,
-    //         abi.encodeWithSelector(ISP1Verifier.verifyProof.selector, fixture.vkey, fixture.publicValues, fakeProof),
-    //         abi.encode()
-    //     );
+    function test_RevertOnInvalidProof() public {
+        bytes memory invalidProof = hex"abcd";
 
-    //     // This should still work since we're only testing decode
-    //     // If you want to test verifier rejection, you'd need different mocking
-    //     (bytes32 returnedTxId,,,) = dwbtc.verifyBitTrxProof(fixture.publicValues, fakeProof);
-    //     assertEq(returnedTxId, fixture.tx_id, "Transaction ID should still decode correctly");
-    // }
+        // Mock failed verification (revert)
+        vm.mockCallRevert(
+            verifier,
+            abi.encodeWithSelector(ISP1Verifier.verifyProof.selector, programVKey, validPublicValues, invalidProof),
+            "Invalid proof from mock"
+        );
 
-    // function testFail_InvalidPublicValues() public {
-    //     DWBTCProofFixtureJson memory fixture = loadFixture();
+        // Expect revert
+        vm.expectRevert("Invalid proof");
+        dwbtc.verifyAndMint(validPublicValues, invalidProof);
+    }
 
-    //     // Create invalid public values
-    //     bytes memory invalidPublicValues = abi.encode("invalid", "data", "format");
+    function test_RevertOnProcessedTx() public {
+        // First successful mint
+        dwbtc.verifyAndMint(validPublicValues, validProof);
 
-    //     vm.mockCall(
-    //         verifier,
-    //         abi.encodeWithSelector(ISP1Verifier.verifyProof.selector, fixture.vkey, invalidPublicValues, fixture.proof),
-    //         abi.encode()
-    //     );
+        // Second attempt should revert
+        vm.expectRevert("Transaction already processed");
+        dwbtc.verifyAndMint(validPublicValues, validProof);
+    }
 
-    //     // Expect revert due to decoding failure
-    //     vm.expectRevert();
-    //     dwbtc.verifyBitTrxProof(invalidPublicValues, fixture.proof);
-    // }
+    function test_RevertOnInvalidInputs() public {
+        // Test invalid is_valid
+        bytes memory invalidPublicValues = abi.encode(txId, user, uint256(1000), false);
+        vm.mockCall(
+            verifier,
+            abi.encodeWithSelector(ISP1Verifier.verifyProof.selector, programVKey, invalidPublicValues, validProof),
+            abi.encode()
+        );
+        vm.expectRevert("Proof is marked as invalid");
+        dwbtc.verifyAndMint(invalidPublicValues, validProof);
+
+        // Test zero amount
+        invalidPublicValues = abi.encode(txId, user, uint256(0), true);
+        vm.mockCall(
+            verifier,
+            abi.encodeWithSelector(ISP1Verifier.verifyProof.selector, programVKey, invalidPublicValues, validProof),
+            abi.encode()
+        );
+        vm.expectRevert("Amount must be greater than zero");
+        dwbtc.verifyAndMint(invalidPublicValues, validProof);
+
+        // Test zero address
+        invalidPublicValues = abi.encode(txId, address(0), uint256(1000), true);
+        vm.mockCall(
+            verifier,
+            abi.encodeWithSelector(ISP1Verifier.verifyProof.selector, programVKey, invalidPublicValues, validProof),
+            abi.encode()
+        );
+        vm.expectRevert("Invalid depositer address");
+        dwbtc.verifyAndMint(invalidPublicValues, validProof);
+    }
+
+    function test_ChangeVerifierAddress() public {
+        address newVerifier = address(0x9999);
+        dwbtc.change_verifier_address(newVerifier);
+        assertEq(dwbtc.verifier(), newVerifier, "Verifier address not updated");
+
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, user));
+        vm.prank(user);
+        dwbtc.change_verifier_address(address(0x1111));
+    }
+
+    function test_ChangeProgramKey() public {
+        bytes32 newKey = keccak256("new_key");
+        dwbtc.change_program_key(newKey);
+        assertEq(dwbtc.programVKey(), newKey, "Program key not updated");
+    }
 }
