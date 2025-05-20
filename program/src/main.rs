@@ -1,33 +1,29 @@
 #![no_main]
 sp1_zkvm::entrypoint!(main);
-use alloy_primitives::{address, fixed_bytes, Address, FixedBytes, I256, U256};
-use alloy_sol_types::{sol, SolType};
+use alloy_primitives::{Address, FixedBytes, U256};
+use alloy_sol_types::SolType;
 use bitcoin::block::{Header, Version}; // Import Header and Version
-use bitcoin::blockdata::script::Script;
+use bitcoin::consensus::deserialize;
 use bitcoin::hash_types::Txid; // Use specific hash types
 use bitcoin::hash_types::{BlockHash, TxMerkleNode}; // Import specific hash types
-use bitcoin::hashes::{sha256d, Hash, HashEngine, Hmac, HmacEngine}; // Import necessary hash traits/types
+use bitcoin::hashes::hex::FromHex; // For hex decoding
+use bitcoin::hashes::{sha256d, Hash}; // Import necessary hash traits/types
+use bitcoin::network::Network;
+use bitcoin::opcodes; // For OP_RETURN opcode check
+use bitcoin::script::Instruction; // For script parsing
 use bitcoin::Amount;
-use bitcoin::Network;
-use bitcoin::{consensus::deserialize, Transaction};
+use bitcoin::Transaction;
+use bitcoin::TxOut;
 use bitcoin::{Address as BitcoinAddress, CompactTarget};
-use lib_struct::{
-    double_sha256, hex_to_bytes, reverse_hash, BitcoinTrxInfoStruct, Block, BundleInfoStruct,
-    Chain, ETHPublicValuesStruct, MerkleProof, RequestInfoStruct,
-};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use lib_struct::{BundleInfoStruct, Chain, ETHPublicValuesStruct, MerkleProof};
+
 use std::error::Error; // For error handling
 use std::str::FromStr; // To parse strings into hash types
+                       // Define a struct to hold output information
 
-// Define a struct to hold output information
-#[derive(Debug)]
-struct OutputInfo {
-    address: Option<BitcoinAddress>, // None if address cannot be derived from script
-    amount: Amount,                  // Amount in satoshis
-}
-
-// Mock struct for Bitcoin transaction data (simplified PoC)
+const DEPOSIT_ADDRESS: &str = "tb1qzfqwyxc70pmlw7l7vmx9nmhmqtgh5z3lp3j9hf"; // Example deposit address
+const NETWORK_TYPE: Network = Network::Testnet; // Example network type
+                                                // Mock struct for Bitcoin transaction data (simplified PoC)
 
 /// Computes the Merkle root from a transaction ID string and its Merkle proof (with string siblings).
 /// Uses bitcoin crate types for hashing and byte order.
@@ -112,48 +108,132 @@ pub fn verify_tx_inclusion_str(
     Ok(computed_root == target_root)
 }
 
-// Function to extract recipients and amounts from a transaction
-fn get_recipients_and_amounts(tx: &Transaction) -> Vec<OutputInfo> {
-    tx.output
-        .iter()
-        .map(|output| {
-            let amount = output.value; // Amount in satoshis
-            let address = BitcoinAddress::from_script(&output.script_pubkey, Network::Testnet).ok();
-            OutputInfo { address, amount }
-        })
-        .collect()
-}
+/// Processes transaction outputs to sum value sent to a specific address
+/// and extract data from the first OP_RETURN output found.
+///
+/// # Arguments
+/// - `raw_hex`: The raw transaction hexadecimal string.
+/// - `my_address_str`: The recipient Bitcoin address to track (as a string).
+/// - `network`: The Bitcoin network (e.g., Testnet, Bitcoin).
+///
+/// # Returns
+/// - `Result<(u64, Option<Vec<u8>>), Box<dyn Error>>`: A tuple containing:
+///   - The total value (in satoshis) sent to `my_address_str`.
+///   - An `Option<Vec<u8>>` containing the raw bytes from the first OP_RETURN data push, if found.
+fn process_transaction_outputs(
+    raw_hex: &str,
+    my_address_str: &str,
+    network: Network,
+) -> Result<(u64, Option<Vec<u8>>), Box<dyn Error>> {
+    // 1. Decode hex and deserialize transaction
+    // Use Vec::from_hex which comes from bitcoin::hashes::hex::FromHex trait
+    let tx_bytes =
+        Vec::<u8>::from_hex(raw_hex).map_err(|e| format!("Failed to decode raw hex: {}", e))?;
+    let tx: Transaction = deserialize(&tx_bytes)?;
 
-// Function to check for a matching output
-fn has_matching_output(tx: &Transaction, req_info: &RequestInfoStruct) -> bool {
-    let outputs = get_recipients_and_amounts(tx);
+    // 2. Parse the target "my" address string into an Address type once
+    // This will error out if the address string is invalid for the network.
+    // let my_address = Address::from_str(my_address_str)?.require_network(network)?; // Ensure address matches the specified network
 
-    // Parse the target address once
-    let target_addr = BitcoinAddress::from_str(&req_info.target_deposit_address)
+    let my_address = BitcoinAddress::from_str(my_address_str)
         .unwrap()
-        .require_network(Network::Testnet)
+        .require_network(network)
         .unwrap();
 
-    // Compare each output to the target address and amount
-    for output in outputs {
-        // println!("Output Address: {:?}", output.address);
-        // println!("Output Amount: {:?}", output.amount);
-        // println!("Target Address: {:?}", target_addr);
-        // println!("Target Amount: {:?}", req_info.amount);
-        // println!("-----------------------------------");
-        if let Some(addr) = &output.address {
-            if *addr == target_addr && output.amount == Amount::from_sat(req_info.amount) {
-                return true; // Match found
+    // 3. Initialize accumulators
+    let mut total_value_to_me: u64 = 0;
+    let mut op_return_data: Option<Vec<u8>> = None; // Store bytes of first OP_RETURN
+
+    // 4. Iterate through all transaction outputs
+    for output in &tx.output {
+        // 5. Check for OP_RETURN output (Objective 1)
+        // script_pubkey typically starts with 0x6a for OP_RETURN
+        if output.script_pubkey.is_op_return() {
+            // Only attempt to extract data if we haven't found an OP_RETURN memo yet
+            if op_return_data.is_none() {
+                // Use the script instruction iterator for robust parsing
+                let mut instructions = output.script_pubkey.instructions();
+                // The first instruction should be OP_RETURN itself
+                if let Some(Ok(Instruction::Op(opcodes::all::OP_RETURN))) = instructions.next() {
+                    // The *next* instruction should be the data push
+                    if let Some(Ok(Instruction::PushBytes(data))) = instructions.next() {
+                        // data is bitcoin::script::PushBytes, get raw bytes using .as_bytes()
+                        op_return_data = Some(data.as_bytes().to_vec());
+                    }
+                    // If there's no data push after OP_RETURN, op_return_data remains None
+                }
+                // Handle potential errors from instructions.next() if needed
+            }
+            // Once identified as OP_RETURN, skip to the next output
+            // (we don't check address/value for OP_RETURN)
+            continue;
+        }
+
+        // 6. Check if the output is addressed to "my address" (Objective 2)
+        // Try to derive an address from the scriptPubKey.
+        // Address::from_script handles P2PKH, P2SH, P2WPKH, P2WSH, P2TR etc.
+        // It will return Err for non-standard scripts (like OP_RETURN, handled above)
+        // or scripts it cannot parse into a standard address form.
+        if let Ok(derived_address) = BitcoinAddress::from_script(&output.script_pubkey, network) {
+            // Compare the derived address with "my" address
+            if derived_address == my_address {
+                // If it matches, add the output's value to the total
+                // Use saturating_add to prevent overflow panic, though unlikely with u64
+                total_value_to_me = total_value_to_me.saturating_add(Amount::to_sat(output.value));
             }
         }
+        // Ignore outputs that couldn't be parsed into a standard address or don't match
     }
-    false // No match found
+
+    // 7. Return the total accumulated value and any found OP_RETURN data
+    Ok((total_value_to_me, op_return_data))
+}
+
+/// Finds and extracts the data bytes from the first valid OP_RETURN output in a slice.
+/// A valid OP_RETURN output per standardness rules consists of OP_RETURN
+/// followed immediately by a single data push opcode (OP_PUSHBYTES_N or OP_PUSHDATA{1,2,4}).
+///
+/// # Arguments
+/// - `outputs`: A slice of transaction outputs (`&[TxOut]`).
+///
+/// # Returns
+/// - `Option<Vec<u8>>`: The raw data bytes from the first valid OP_RETURN data push, or None.
+fn find_op_return_memo(outputs: &[TxOut]) -> Option<Vec<u8>> {
+    for output in outputs {
+        // Use the efficient check provided by the script module
+        if output.script_pubkey.is_op_return() {
+            // If it might be OP_RETURN, parse instructions to confirm structure and extract data
+            let mut instructions = output.script_pubkey.instructions();
+            // Expect OP_RETURN opcode first
+            if let Some(Ok(Instruction::Op(opcodes::all::OP_RETURN))) = instructions.next() {
+                // Expect *only* a data push next
+                if let Some(Ok(Instruction::PushBytes(data))) = instructions.next() {
+                    // Check that there are NO more instructions after the data push
+                    if instructions.next().is_none() {
+                        // Found a standard, valid OP_RETURN output with data. Return it.
+                        return Some(data.as_bytes().to_vec());
+                    }
+                }
+                // If the structure wasn't OP_RETURN + single data push + END,
+                // it's not a standard/valid OP_RETURN for our purposes.
+                // We typically only care about the first one found.
+                // If the first one is malformed, we return None.
+                return None;
+            }
+            // If parsing fails or structure is wrong after is_op_return() was true,
+            // treat it as non-standard/malformed.
+            return None; // Or continue the loop if multiple OP_RETURNS could exist (non-standard)
+                         // Sticking to finding the first one and checking its validity.
+        }
+    }
+    // No output started with OP_RETURN or the first one found was malformed
+    None
 }
 
 /// Verifies the integrity and linkage of a chain of exactly 7 blocks using bitcoin crate types.
 pub fn verify_chain_with_crate(chain: &Chain) -> Result<(), Box<dyn Error>> {
     // Rule 1: Check for exactly 7 blocks
-    if chain.blocks.len() != 7 {
+    if chain.blocks.len() != 6 {
         return Err(format!(
             "Chain validation failed: Expected exactly 7 blocks, found {}",
             chain.blocks.len()
@@ -161,7 +241,7 @@ pub fn verify_chain_with_crate(chain: &Chain) -> Result<(), Box<dyn Error>> {
         .into());
     }
 
-    let mut computed_hashes: Vec<BlockHash> = Vec::with_capacity(7);
+    let mut computed_hashes: Vec<BlockHash> = Vec::with_capacity(6);
 
     for (i, user_block) in chain.blocks.iter().enumerate() {
         // Parse string hashes into Bitcoin crate types
@@ -221,11 +301,44 @@ pub fn main() {
     let txid = tx.compute_txid();
     println!("Transaction ID: {}", txid);
 
-    // First, verify transaction against the request info
-    match has_matching_output(&tx, &bundle.req_info) {
-        true => println!("Transaction matches the request info"),
-        false => panic!("Transaction does not match the request info"),
+    // // First, verify transaction against the request info
+    // match has_matching_output(&tx, &bundle.req_info) {
+    //     true => println!("Transaction matches the request info"),
+    //     false => panic!("Transaction does not match the request info"),
+    // }
+
+    // Verify the transaction given the raw hex. Extract the total amount deposited to the DEPOSIT_ADDRESS, and extract the memo.
+    let (total_sats_to_me, memo_bytes) = process_transaction_outputs(
+        &bundle.bit_tx_info.raw_tx_hex,
+        DEPOSIT_ADDRESS,
+        NETWORK_TYPE,
+    )
+    .unwrap();
+
+    // --- Output Results ---
+    println!(
+        "Total satoshis sent to {}: {}",
+        DEPOSIT_ADDRESS, total_sats_to_me
+    );
+    let deposit_eth_address: String;
+    // Handle displaying the memo
+    if let Some(bytes) = memo_bytes {
+        match String::from_utf8(bytes.clone()) {
+            // Clone bytes for UTF-8 check
+            Ok(memo_str) => {
+                println!("Found OP_RETURN memo (UTF-8): {}", memo_str);
+                deposit_eth_address = memo_str;
+            }
+            Err(_) => {
+                println!("Found OP_RETURN memo (Hex): {}", hex::encode(bytes));
+                panic!("Memo is not valid UTF-8");
+            } // Display as hex if not UTF-8
+        }
+    } else {
+        println!("No valid OP_RETURN memo found in this transaction.");
+        panic!("No OP_RETURN memo found");
     }
+    // --- End Output Results ---
 
     // Verify the tx is included in the merkle proof
     match verify_tx_inclusion_str(
@@ -250,9 +363,8 @@ pub fn main() {
     // let result = verify_bitcoin_tx(&bundle.bit_info, &bundle.req_info);
     let bytes = ETHPublicValuesStruct::abi_encode(&ETHPublicValuesStruct {
         tx_id: txid.to_string().as_str().parse::<FixedBytes<32>>().unwrap(),
-        depositer_address: Address::parse_checksummed(bundle.req_info.depositer_eth_address, None)
-            .unwrap(),
-        amount: U256::from(bundle.req_info.amount),
+        depositer_address: Address::parse_checksummed(deposit_eth_address, None).unwrap(),
+        amount: U256::from(total_sats_to_me),
         is_valid: true,
     });
     // // println!("The total bytes:{:?}", &bytes);

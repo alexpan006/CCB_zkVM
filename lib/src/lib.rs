@@ -59,7 +59,6 @@ pub struct BundleInfoStruct {
     pub merkle_proof: MerkleProof,
     pub chains: Chain,
     pub bit_tx_info: BitcoinTrxInfoStruct,
-    pub req_info: RequestInfoStruct,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
