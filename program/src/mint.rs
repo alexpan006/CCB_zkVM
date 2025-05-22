@@ -33,7 +33,6 @@ fn compute_merkle_root_with_crate(
     let txid = Txid::from_str(tx_id_str)?;
     let mut current_hash_bytes: [u8; 32] = *txid.as_byte_array();
     let mut pos = merkle_proof.pos;
-
     for sibling_hex in &merkle_proof.siblings {
         let sibling_node = TxMerkleNode::from_str(sibling_hex)?;
         let sibling_bytes: [u8; 32] = *sibling_node.as_byte_array();
@@ -76,8 +75,8 @@ fn process_transaction_outputs(
     my_address_str: &str,
     network: Network,
 ) -> Result<(u64, Option<Vec<u8>>), Box<dyn Error>> {
-    let tx_bytes = Vec::<u8>::from_hex(raw_hex)
-        .map_err(|e| format!("Failed to decode raw hex: {}", e))?;
+    let tx_bytes =
+        Vec::<u8>::from_hex(raw_hex).map_err(|e| format!("Failed to decode raw hex: {}", e))?;
     let tx: Transaction = deserialize(&tx_bytes)?;
 
     let my_address = BitcoinAddress::from_str(my_address_str)
