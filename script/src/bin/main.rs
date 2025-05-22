@@ -5,12 +5,13 @@
 use alloy_sol_types::SolType;
 use clap::Parser;
 use lib_struct::{
-    BitcoinTrxInfoStruct, Block, BundleInfoStruct, Chain, ETHPublicValuesStruct, MerkleProof,
-    RequestInfoStruct,
+    BitcoinTrxInfoStruct, Block, BundleInfoStruct, Chain, MerkleProof, RequestInfoStruct,
+    ZkpBurnPublicValuesStruct, ZkpMintPublicValuesStruct,
 };
 use sp1_sdk::{include_elf, ProverClient, SP1Stdin};
 // ELF file for the Bitcoin transaction verification zkVM program (assumes compiled from your zkVM code)
-pub const BITCOIN_VERIFY_ELF: &[u8] = include_elf!("bitcoin_verify_program");
+pub const MINT_CIRCUIT_ELF: &[u8] = include_elf!("mint_circuit");
+pub const BURN_CIRCUIT_ELF: &[u8] = include_elf!("burn_circuit");
 // Structs for Bitcoin transaction data and public values (mirroring zkVM pseudocode)
 /// CLI arguments
 #[derive(Parser, Debug)]
@@ -200,28 +201,39 @@ fn main() {
 
     // RUST_LOG=info cargo run --release -- --execute
 
-    // Setup the inputs.
     let mut stdin = SP1Stdin::new();
+    // Test for the Mint circuit
+    // let bundle_data = BundleInfoStruct {
+    //     merkle_proof: mock_merkle_proof,
+    //     chains: mock_chain,
+    //     bit_tx_info: mock_tx_2,
+    //     burner_btc_address: None,
+    // };
+    // Test for the Burn circuit
+    let test_burner_btc_address = "tb1qzfqwyxc70pmlw7l7vmx9nmhmqtgh5z3lp3j9hf".to_string();
     let bundle_data = BundleInfoStruct {
         merkle_proof: mock_merkle_proof,
         chains: mock_chain,
         bit_tx_info: mock_tx_2,
+        burner_btc_address: test_burner_btc_address.into(),
     };
+
     stdin.write(&bundle_data);
 
     if args.execute {
         // Execute the program
-        let (output, report) = client.execute(BITCOIN_VERIFY_ELF, &stdin).run().unwrap();
+        // let (output, report) = client.execute(MINT_CIRCUIT_ELF, &stdin).run().unwrap();
+        let (output, report) = client.execute(BURN_CIRCUIT_ELF, &stdin).run().unwrap();
         // let total_compute_cycles = report.cycle_tracker.get("compute").unwrap();
         // let compute_invocation_count = report.invocation_tracker.get("compute").unwrap();
         println!("-------------------------------------------");
         // println!("Total compute cycles: {:?}", total_compute_cycles);
         // println!("Compute invocation count: {:?}", compute_invocation_count);
         // let decode_output = ;
-        println!("Report:{:?},", report);
+        // println!("Report:{:?},", report);
         println!("Program executed successfully");
 
-        // -------------------------------------
+        // ----------------- Mint --------------------
         // let decode_output = ;
         // Read the output.
         // let decoded = ETHPublicValuesStruct::abi_decode(output.as_slice(), false).unwrap();
@@ -239,9 +251,25 @@ fn main() {
         // println!("amount: {:?}", amount);
         // println!("is valid or not: {:?}", is_valid);
         // println!("Number of cycles: {:?}", report.total_instruction_count());
+
+        // ----------------- Burn --------------------
+        // let decode_output = ;
+        // Read the output.
+        let decoded = ZkpBurnPublicValuesStruct::abi_decode(output.as_slice(), false).unwrap();
+
+        let ZkpBurnPublicValuesStruct {
+            burner_btc_address,
+            amount,
+            is_valid,
+        } = decoded;
+
+        println!("-------------------------------------------");
+        println!("Burner btc address: {:?}", burner_btc_address);
+        println!("amount: {:?}", amount);
+        println!("is valid or not: {:?}", is_valid);
     } else {
         // Setup the program for proving.
-        let (pk, vk) = client.setup(BITCOIN_VERIFY_ELF);
+        let (pk, vk) = client.setup(MINT_CIRCUIT_ELF);
 
         // Generate the proof
         let proof = client
@@ -253,9 +281,8 @@ fn main() {
         // println!("The proof is {:?}", proof.public_values.as_slice());
         // println!("Public values:{:?}", proof.public_values);
         let bytes = proof.public_values.as_slice();
-        let decoded = ETHPublicValuesStruct::abi_decode(bytes, false).unwrap();
+        let decoded = ZkpMintPublicValuesStruct::abi_decode(bytes, false).unwrap();
         println!("The tx_id ={:?}", decoded.tx_id);
-
         // Verify the proof.
         client.verify(&proof, &vk).expect("failed to verify proof");
         println!("Successfully verified proof!");

@@ -15,13 +15,13 @@ use bitcoin::Amount;
 use bitcoin::Transaction;
 use bitcoin::TxOut;
 use bitcoin::{Address as BitcoinAddress, CompactTarget};
-use lib_struct::{BundleInfoStruct, Chain, ETHPublicValuesStruct, MerkleProof};
+use lib_struct::{BundleInfoStruct, Chain, MerkleProof, ZkpBurnPublicValuesStruct};
 
 use std::error::Error; // For error handling
 use std::str::FromStr; // To parse strings into hash types
                        // Define a struct to hold output information
 
-const DEPOSIT_ADDRESS: &str = "tb1qzfqwyxc70pmlw7l7vmx9nmhmqtgh5z3lp3j9hf"; // Example deposit address
+const BRIDGE_ADDRESS: &str = "tb1qzfqwyxc70pmlw7l7vmx9nmhmqtgh5z3lp3j9hf"; // Example deposit address
 const NETWORK_TYPE: Network = Network::Testnet; // Example network type
                                                 // Mock struct for Bitcoin transaction data (simplified PoC)
 
@@ -135,7 +135,7 @@ fn process_transaction_outputs(
     // This will error out if the address string is invalid for the network.
     // let my_address = Address::from_str(my_address_str)?.require_network(network)?; // Ensure address matches the specified network
 
-    let my_address = BitcoinAddress::from_str(my_address_str)
+    let target_address = BitcoinAddress::from_str(my_address_str)
         .unwrap()
         .require_network(network)
         .unwrap();
@@ -146,29 +146,6 @@ fn process_transaction_outputs(
 
     // 4. Iterate through all transaction outputs
     for output in &tx.output {
-        // 5. Check for OP_RETURN output (Objective 1)
-        // script_pubkey typically starts with 0x6a for OP_RETURN
-        if output.script_pubkey.is_op_return() {
-            // Only attempt to extract data if we haven't found an OP_RETURN memo yet
-            if op_return_data.is_none() {
-                // Use the script instruction iterator for robust parsing
-                let mut instructions = output.script_pubkey.instructions();
-                // The first instruction should be OP_RETURN itself
-                if let Some(Ok(Instruction::Op(opcodes::all::OP_RETURN))) = instructions.next() {
-                    // The *next* instruction should be the data push
-                    if let Some(Ok(Instruction::PushBytes(data))) = instructions.next() {
-                        // data is bitcoin::script::PushBytes, get raw bytes using .as_bytes()
-                        op_return_data = Some(data.as_bytes().to_vec());
-                    }
-                    // If there's no data push after OP_RETURN, op_return_data remains None
-                }
-                // Handle potential errors from instructions.next() if needed
-            }
-            // Once identified as OP_RETURN, skip to the next output
-            // (we don't check address/value for OP_RETURN)
-            continue;
-        }
-
         // 6. Check if the output is addressed to "my address" (Objective 2)
         // Try to derive an address from the scriptPubKey.
         // Address::from_script handles P2PKH, P2SH, P2WPKH, P2WSH, P2TR etc.
@@ -176,7 +153,7 @@ fn process_transaction_outputs(
         // or scripts it cannot parse into a standard address form.
         if let Ok(derived_address) = BitcoinAddress::from_script(&output.script_pubkey, network) {
             // Compare the derived address with "my" address
-            if derived_address == my_address {
+            if derived_address == target_address {
                 // If it matches, add the output's value to the total
                 // Use saturating_add to prevent overflow panic, though unlikely with u64
                 total_value_to_me = total_value_to_me.saturating_add(Amount::to_sat(output.value));
@@ -295,50 +272,20 @@ pub fn main() {
 
     // Extract the transaction detail from raw hex
     let tx_bytes = hex::decode(&bundle.bit_tx_info.raw_tx_hex).unwrap();
+    let BURNER_BTC_ADDRESS = &bundle.burner_btc_address.unwrap();
     // Step 2: Parse the bytes into a Bitcoin Transaction
     let tx: Transaction = deserialize(&tx_bytes).unwrap();
     // Step 3: Check if the output index is valid
     let txid = tx.compute_txid();
     println!("Transaction ID: {}", txid);
 
-    // // First, verify transaction against the request info
-    // match has_matching_output(&tx, &bundle.req_info) {
-    //     true => println!("Transaction matches the request info"),
-    //     false => panic!("Transaction does not match the request info"),
-    // }
-
     // Verify the transaction given the raw hex. Extract the total amount deposited to the DEPOSIT_ADDRESS, and extract the memo.
-    let (total_sats_to_me, memo_bytes) = process_transaction_outputs(
+    let (total_sats_to_target, memo_bytes) = process_transaction_outputs(
         &bundle.bit_tx_info.raw_tx_hex,
-        DEPOSIT_ADDRESS,
+        BURNER_BTC_ADDRESS,
         NETWORK_TYPE,
     )
     .unwrap();
-
-    // --- Output Results ---
-    println!(
-        "Total satoshis sent to {}: {}",
-        DEPOSIT_ADDRESS, total_sats_to_me
-    );
-    let deposit_eth_address: String;
-    // Handle displaying the memo
-    if let Some(bytes) = memo_bytes {
-        match String::from_utf8(bytes.clone()) {
-            // Clone bytes for UTF-8 check
-            Ok(memo_str) => {
-                println!("Found OP_RETURN memo (UTF-8): {}", memo_str);
-                deposit_eth_address = memo_str;
-            }
-            Err(_) => {
-                println!("Found OP_RETURN memo (Hex): {}", hex::encode(bytes));
-                panic!("Memo is not valid UTF-8");
-            } // Display as hex if not UTF-8
-        }
-    } else {
-        println!("No valid OP_RETURN memo found in this transaction.");
-        panic!("No OP_RETURN memo found");
-    }
-    // --- End Output Results ---
 
     // Verify the tx is included in the merkle proof
     match verify_tx_inclusion_str(
@@ -361,10 +308,9 @@ pub fn main() {
 
     // // Verify the transaction
     // let result = verify_bitcoin_tx(&bundle.bit_info, &bundle.req_info);
-    let bytes = ETHPublicValuesStruct::abi_encode(&ETHPublicValuesStruct {
-        tx_id: txid.to_string().as_str().parse::<FixedBytes<32>>().unwrap(),
-        depositer_address: Address::parse_checksummed(deposit_eth_address, None).unwrap(),
-        amount: U256::from(total_sats_to_me),
+    let bytes = ZkpBurnPublicValuesStruct::abi_encode(&ZkpBurnPublicValuesStruct {
+        burner_btc_address: BURNER_BTC_ADDRESS.to_string(),
+        amount: U256::from(total_sats_to_target),
         is_valid: true,
     });
     // // println!("The total bytes:{:?}", &bytes);

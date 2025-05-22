@@ -5,13 +5,22 @@ use sha2::{Digest, Sha256};
 use std::error::Error;
 sol! {
     /// The public values encoded as a struct that can be easily deserialized inside Solidity.
-    struct ETHPublicValuesStruct {
+    struct ZkpMintPublicValuesStruct {
         bytes32 tx_id;  // Record txid prevent re-entry.
         address depositer_address; // Address to send money.
         uint256 amount; // Amount to mint.
         bool is_valid;
     }
 }
+sol! {
+    /// The public values encoded as a struct that can be easily deserialized inside Solidity.
+    struct ZkpBurnPublicValuesStruct {
+        string burner_btc_address; // Address to send money.
+        uint256 amount; // Amount to mint.
+        bool is_valid;
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Chain {
@@ -59,12 +68,13 @@ pub struct BundleInfoStruct {
     pub merkle_proof: MerkleProof,
     pub chains: Chain,
     pub bit_tx_info: BitcoinTrxInfoStruct,
+    pub burner_btc_address: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 // Fixture
-pub struct EthProofFixture {
+pub struct ZkpProofFixture {
     pub vkey: String,
     pub public_value: String,
     pub proof: String,

@@ -11,11 +11,11 @@
 //! ```
 use alloy_sol_types::SolType;
 use lib_struct::{
-    BitcoinTrxInfoStruct, Block, BundleInfoStruct, Chain, ETHPublicValuesStruct, EthProofFixture,
-    MerkleProof, RequestInfoStruct,
+    BitcoinTrxInfoStruct, Block, BundleInfoStruct, Chain, MerkleProof, RequestInfoStruct,
+    ZkpBurnPublicValuesStruct, ZkpMintPublicValuesStruct, ZkpProofFixture,
 };
 // ELF file for the Bitcoin transaction verification zkVM program (assumes compiled from your zkVM code)
-pub const BITCOIN_VERIFY_ELF: &[u8] = include_elf!("bitcoin_verify_program");
+pub const MINT_CIRCUIT_ELF: &[u8] = include_elf!("mint_circuit");
 
 use clap::{Parser, ValueEnum};
 use sp1_sdk::{
@@ -51,7 +51,7 @@ fn main() {
     let client = ProverClient::from_env();
 
     // Setup the program.
-    let (pk, vk) = client.setup(BITCOIN_VERIFY_ELF);
+    let (pk, vk) = client.setup(MINT_CIRCUIT_ELF);
 
     // Mock Bitcoin transaction input (replace with real Testnet data in practice)
     let mock_tx = BitcoinTrxInfoStruct {
@@ -220,6 +220,7 @@ fn main() {
         merkle_proof: mock_merkle_proof,
         chains: mock_chain,
         bit_tx_info: mock_tx_2,
+        burner_btc_address: None,
     };
     stdin.write(&bundle_data);
 
@@ -245,7 +246,7 @@ fn create_proof_fixture(
     // let decoded = ETHPublicValuesStruct::abi_decode(bytes, false).unwrap();
     // println!("The evm decode tx_id is ===>{}", decoded.tx_id);
 
-    let fixture = EthProofFixture {
+    let fixture = ZkpProofFixture {
         vkey: vk.bytes32().to_string(),
         public_value: format!("0x{}", hex::encode(bytes)),
         proof: format!("0x{}", hex::encode(proof.bytes())),
@@ -271,7 +272,7 @@ fn create_proof_fixture(
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contracts/src/fixtures");
     std::fs::create_dir_all(&fixture_path).expect("failed to create fixture path");
     std::fs::write(
-        fixture_path.join(format!("{:?}-fixture.json", system).to_lowercase()),
+        fixture_path.join(format!("{:?}-fixture_mint.json", system).to_lowercase()),
         serde_json::to_string_pretty(&fixture).unwrap(),
     )
     .expect("failed to write fixture");
