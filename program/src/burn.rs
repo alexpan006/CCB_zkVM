@@ -1,7 +1,8 @@
 #![no_main]
 sp1_zkvm::entrypoint!(main);
-
 use alloy_primitives::U256;
+use alloy_sol_types::sol_data::String as SolString;
+// use alloy_sol_types::SolType;
 use alloy_sol_types::SolType;
 use bitcoin::block::{Header, Version};
 use bitcoin::consensus::deserialize;
@@ -142,6 +143,57 @@ pub fn verify_chain_with_crate(chain: &Chain) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Manually ABI-encodes the tuple (string burner_btc_address, uint256 amount, bool is_valid)
+/// according to Solidity's ABI spec.
+///
+/// # Layout:
+/// head (3 slots):
+///   [0] offset to start of string data = 3 * 32 = 96
+///   [1] amount (uint256)
+///   [2] is_valid (bool as uint256)
+/// tail:
+///   [3] string length (uint256)
+///   [4+] string bytes (padded to 32-byte boundary)
+///
+/// # Parameters
+/// - `burner_btc_address`: the UTF-8 Bitcoin address string
+/// - `amount`: the amount to encode (u64)
+/// - `is_valid`: whether the proof is valid (bool)
+pub fn abi_encode_zkp_burn(burner_btc_address: &str, amount: u64, is_valid: bool) -> Vec<u8> {
+    let mut encoded = Vec::new();
+
+    // 1) Head slot 0: offset to dynamic string = 3 * 32 = 96
+    let offset_bytes: [u8; 32] = U256::from(96u64).to_be_bytes();
+    encoded.extend_from_slice(&offset_bytes);
+
+    // 2) Head slot 1: amount as uint256
+    let amount_bytes: [u8; 32] = U256::from(amount).to_be_bytes();
+    encoded.extend_from_slice(&amount_bytes);
+
+    // 3) Head slot 2: is_valid as 0 or 1 in uint256
+    let valid_u256 = if is_valid { U256::ONE } else { U256::ZERO };
+    let valid_bytes: [u8; 32] = valid_u256.to_be_bytes();
+    encoded.extend_from_slice(&valid_bytes);
+
+    // Tail: dynamic string data
+    let s_bytes = burner_btc_address.as_bytes();
+
+    // 4) Length prefix
+    let len_bytes: [u8; 32] = U256::from(s_bytes.len() as u64).to_be_bytes();
+    encoded.extend_from_slice(&len_bytes);
+
+    // 5) Actual string bytes
+    encoded.extend_from_slice(s_bytes);
+
+    // 6) Padding for string data to 32-byte boundary
+    let rem = s_bytes.len() % 32;
+    if rem != 0 {
+        let pad_len = 32 - rem;
+        encoded.extend(std::iter::repeat(0u8).take(pad_len));
+    }
+
+    encoded
+}
 /// zkVM entrypoint: verifies a Bitcoin burn and prepares public values for proof.
 ///
 /// This circuit proves, in zero-knowledge, that a Bitcoin transaction sent funds to a
@@ -193,12 +245,13 @@ pub fn main() {
         Err(e) => panic!("Chain verification failed: {}", e),
     }
 
-    // Prepare and commit public values for the zk proof
-    let bytes = ZkpBurnPublicValuesStruct::abi_encode(&ZkpBurnPublicValuesStruct {
-        burner_btc_address: burner_btc_address.to_string(),
-        amount: U256::from(total_sats_to_burner),
-        is_valid: true,
-    });
-
-    sp1_zkvm::io::commit_slice(&bytes);
+    // // Prepare and commit public values for the zk proof
+    // let bytes = ZkpBurnPublicValuesStruct::abi_encode(&ZkpBurnPublicValuesStruct {
+    //     burner_btc_address: burner_btc_address.to_string(),
+    //     amount: U256::from(total_sats_to_burner),
+    //     is_valid: true,
+    // });
+    let payload = abi_encode_zkp_burn(burner_btc_address, total_sats_to_burner, true);
+    println!("Encoded public values: {}", hex::encode(&payload));
+    sp1_zkvm::io::commit_slice(&payload);
 }

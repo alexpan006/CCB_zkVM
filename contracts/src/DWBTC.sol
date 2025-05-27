@@ -21,6 +21,15 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
     uint256 public cumulativeRewardPerStaker;
     uint256 public dustCollected;
 
+    // Staker related variables
+    mapping(address => uint256) public stakerInitialLocked;
+    mapping(address => uint256) public stakerUnlocked;
+    mapping(address => uint256) public stakerLastUnlockTime;
+    mapping(address => uint256) public stakerForeverLocked;
+    uint256 public initialMintUnlockStart;
+    uint256 public initialMintUnlockEnd;
+    bool public initialMinted;
+
 
     // Mapping to track processed transaction IDs
     mapping(bytes32 => bool) public processedTxIds;
@@ -43,6 +52,7 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
     mapping(uint256 => BurnRequest) public burnRequests;
     uint256 public nextBurnId = 0;
     uint256 public constant SUBMISSION_PERIOD = 1 days;
+    string public  BRIDGE_ADDRESS;
 
     // Reward percentages in basis points (1% = 100 basis points)
     uint256 public constant BURN_SUBMITTER_REWARD = 50; // 0.5%
@@ -93,15 +103,21 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
     error StakerRequired();
     error InitializationStakerListError();
 
+    // Initial mint related errors
+    error InitialMintAlreadyDone();
+    error InitialMintAmountTooSmall();
+
     constructor(
         address _verifier,
         bytes32 _programVKey_mint,
         bytes32 _programVKey_burn,
+        string memory _bridge_address,
         address[] memory _stakers
     ) ERC20("Decentralized Wrapped Bitcoin", "DWBTC") Ownable(msg.sender) {
         verifier = _verifier;
         programVKey_mint = _programVKey_mint;
         programVKey_burn = _programVKey_burn;
+        BRIDGE_ADDRESS = _bridge_address;
 
         require(_stakers.length > 0, "Stakers required");
         for (uint256 i = 0; i < _stakers.length; i++) {
@@ -109,6 +125,30 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
             require(s != address(0) && !isStaker[s], InitializationStakerListError());
             stakers.push(s);
             isStaker[s] = true;
+        }
+    }
+
+    function initialMint(
+    uint256 amountPerStaker,
+    uint256 foreverLockedAmount,
+    uint256 unlockDuration
+    )
+    external
+    onlyOwner
+    {
+        require(!initialMinted, "Already minted");
+        require(amountPerStaker > foreverLockedAmount, "Forever locked must be less than minted");
+        initialMinted = true;
+        initialMintUnlockStart = block.timestamp;
+        initialMintUnlockEnd = block.timestamp + unlockDuration;
+
+        for (uint256 i = 0; i < stakers.length; i++) {
+            address s = stakers[i];
+            _mint(s, amountPerStaker);
+            stakerInitialLocked[s] = amountPerStaker;
+            stakerUnlocked[s] = 0;
+            stakerLastUnlockTime[s] = block.timestamp;
+            stakerForeverLocked[s] = foreverLockedAmount;
         }
     }
 

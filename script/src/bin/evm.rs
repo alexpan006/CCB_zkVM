@@ -15,8 +15,8 @@ use lib_struct::{
     ZkpBurnPublicValuesStruct, ZkpMintPublicValuesStruct, ZkpProofFixture,
 };
 // ELF file for the Bitcoin transaction verification zkVM program (assumes compiled from your zkVM code)
-pub const MINT_CIRCUIT_ELF: &[u8] = include_elf!("mint_circuit");
-
+// pub const MINT_CIRCUIT_ELF: &[u8] = include_elf!("mint_circuit");
+pub const BURN_CIRCUIT_ELF: &[u8] = include_elf!("burn_circuit");
 use clap::{Parser, ValueEnum};
 use sp1_sdk::{
     include_elf, HashableKey, ProverClient, SP1ProofWithPublicValues, SP1Stdin, SP1VerifyingKey,
@@ -51,13 +51,12 @@ fn main() {
     let client = ProverClient::from_env();
 
     // Setup the program.
-    let (pk, vk) = client.setup(MINT_CIRCUIT_ELF);
+    let (pk, vk) = client.setup(BURN_CIRCUIT_ELF);
 
     // Mock Bitcoin transaction input (replace with real Testnet data in practice)
     let mock_tx = BitcoinTrxInfoStruct {
         raw_tx_hex: "02000000000101421c10cda02eab4c0674ab4ee43f092106cb276a932532f40ddacf8800dd10d20000000000fdffffff029594be0000000000160014c9d25250c0d6ef608eb7343c6d43be9e60d8dcd6a3540000000000001600149be9f198e0a2fb264f1afe22f874e917612de49a0140407a9364cb1b4024345eece3f976c976c9085ba625495e1fe70b60357b90c1e6f582e96a1f5d4c8decd787e9252c293633bb11e4dbf2c905b1fe36321557f829a1293b00".into(), // Placeholder txID
     };
-
     // Mock Bitcoin transaction input (replace with real Testnet data in practice)
     let mock_tx_2 = BitcoinTrxInfoStruct {
         raw_tx_hex: "010000000001015564819f67c2803761c4370d9a5fd950c8e6ff34d68ebacc47fd21413aa833ea0100000000ffffffff03e8030000000000001600141240e21b1e7877f77bfe66cc59eefb02d17a0a3f00000000000000002c6a2a3078613836456433343742384431303433353333666533306330374663343766334533623834396134329b020000000000001600144cf2f041e4acc16071306ab41414cab4c76cfd5002483045022100bf43ff7d1ae782368550cb14cc916d389277a0f103643fa352ea76ba2ccd731502205028ba84f39deb9ff71db91153c6f71e7f9f5f6df9258c29bb49ec0461785b75012103292a330133c26afde92f10737cc3e38ebcf7403b4e2232c4b65821c1aa55cdf800000000".into(), // Placeholder txID
@@ -213,14 +212,14 @@ fn main() {
     };
 
     // RUST_LOG=info cargo run --release -- --execute
-
+    let burner_btc_address = "tb1qzfqwyxc70pmlw7l7vmx9nmhmqtgh5z3lp3j9hf".to_string();
     // Setup the inputs.
     let mut stdin = SP1Stdin::new();
     let bundle_data = BundleInfoStruct {
         merkle_proof: mock_merkle_proof,
         chains: mock_chain,
         bit_tx_info: mock_tx_2,
-        burner_btc_address: None,
+        burner_btc_address: burner_btc_address.into(),
     };
     stdin.write(&bundle_data);
 
@@ -245,6 +244,18 @@ fn create_proof_fixture(
     let bytes = proof.public_values.as_slice();
     // let decoded = ETHPublicValuesStruct::abi_decode(bytes, false).unwrap();
     // println!("The evm decode tx_id is ===>{}", decoded.tx_id);
+    // let decoded = ZkpBurnPublicValuesStruct::abi_decode(bytes).unwrap();
+
+    // let ZkpBurnPublicValuesStruct {
+    //     burner_btc_address,
+    //     amount,
+    //     is_valid,
+    // } = decoded;
+
+    // println!("-------------------------------------------");
+    // println!("Burner btc address: {:?}", burner_btc_address);
+    // println!("amount: {:?}", amount);
+    // println!("is valid or not: {:?}", is_valid);
 
     let fixture = ZkpProofFixture {
         vkey: vk.bytes32().to_string(),
@@ -272,7 +283,7 @@ fn create_proof_fixture(
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contracts/src/fixtures");
     std::fs::create_dir_all(&fixture_path).expect("failed to create fixture path");
     std::fs::write(
-        fixture_path.join(format!("{:?}-fixture_mint.json", system).to_lowercase()),
+        fixture_path.join(format!("{:?}-fixture_burn.json", system).to_lowercase()),
         serde_json::to_string_pretty(&fixture).unwrap(),
     )
     .expect("failed to write fixture");

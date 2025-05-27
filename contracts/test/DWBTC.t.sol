@@ -31,6 +31,8 @@ contract DWBTCTest is Test {
     address operator2 = address(0x4);
     address[] stakers = [address(0x5), address(0x6), address(0x7)];
 
+    string bridge = "abc";
+
     bytes32 constant PROGRAM_VKEY_MINT = keccak256("mint");
     bytes32 constant PROGRAM_VKEY_BURN = keccak256("burn");
     uint256 constant SATOSHI_TO_DWBTC = 10**10;
@@ -39,7 +41,7 @@ contract DWBTCTest is Test {
     function setUp() public {
         vm.startPrank(owner);
         verifier = new MockSP1Verifier(true);
-        dwbtc = new DWBTC(address(verifier), PROGRAM_VKEY_MINT, PROGRAM_VKEY_BURN, stakers);
+        dwbtc = new DWBTC(address(verifier), PROGRAM_VKEY_MINT, PROGRAM_VKEY_BURN, bridge,stakers);
         vm.stopPrank();
     }
     // Helper function to mint tokens for testing
@@ -377,6 +379,13 @@ contract DWBTCTest is Test {
 
         assertGt(dwbtc.cumulativeRewardPerStaker(), before_staker_reward);
     }
+    function testDistributeDustTooLow() public {
+        mintForUser(user, 1); // Accumulate some dust
+        vm.prank(stakers[0]);
+        vm.expectRevert(DWBTC.DustTooLow.selector);
+        dwbtc.distributeDust();
+    }
+
 
     // Admin Tests
     function testChangeVerifierAddress() public {

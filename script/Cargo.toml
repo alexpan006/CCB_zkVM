@@ -6,9 +6,9 @@ default-run = "bitcoin_verify_script"
 
 
 [dependencies]
-sp1-sdk = "4.0.0"
-serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
-serde = { version = "1.0.200", default-features = false, features = ["derive"] }
+sp1-sdk = "4.2.1"
+serde_json = { version = "1.0.132", default-features = false, features = ["alloc"] }
+serde = { version = "1.0.204", default-features = false, features = ["derive"] }
 clap = { version = "4.0", features = ["derive", "env"] }
 tracing = "0.1.40"
 hex = "0.4.3"
@@ -19,7 +19,7 @@ rand = "0.8"
                                      
 
 [build-dependencies]
-sp1-build = "4.0.0"
+sp1-build = "4.2.1"
 
 [[bin]]
 name = "bitcoin_verify_script"

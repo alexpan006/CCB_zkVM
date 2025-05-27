@@ -200,6 +200,7 @@ fn main() {
     };
 
     // RUST_LOG=info cargo run --release -- --execute
+    let burner_btc_address = "tb1qzfqwyxc70pmlw7l7vmx9nmhmqtgh5z3lp3j9hf".to_string();
 
     let mut stdin = SP1Stdin::new();
     // Test for the Mint circuit
@@ -207,7 +208,7 @@ fn main() {
         merkle_proof: mock_merkle_proof,
         chains: mock_chain,
         bit_tx_info: mock_tx_2,
-        burner_btc_address: None,
+        burner_btc_address: burner_btc_address.into(),
     };
     // Test for the Burn circuit
     // let test_burner_btc_address = "tb1qzfqwyxc70pmlw7l7vmx9nmhmqtgh5z3lp3j9hf".to_string();
@@ -222,7 +223,7 @@ fn main() {
 
     if args.execute {
         // Execute the program
-        let (output, report) = client.execute(MINT_CIRCUIT_ELF, &stdin).run().unwrap();
+        let (output, report) = client.execute(BURN_CIRCUIT_ELF, &stdin).run().unwrap();
         // let (output, report) = client.execute(BURN_CIRCUIT_ELF, &stdin).run().unwrap();
         // let total_compute_cycles = report.cycle_tracker.get("compute").unwrap();
         // let compute_invocation_count = report.invocation_tracker.get("compute").unwrap();
@@ -255,18 +256,18 @@ fn main() {
         // ----------------- Burn --------------------
         // let decode_output = ;
         // Read the output.
-        // let decoded = ZkpBurnPublicValuesStruct::abi_decode(output.as_slice(), false).unwrap();
+        let decoded = ZkpBurnPublicValuesStruct::abi_decode(output.as_slice()).unwrap();
 
-        // let ZkpBurnPublicValuesStruct {
-        //     burner_btc_address,
-        //     amount,
-        //     is_valid,
-        // } = decoded;
+        let ZkpBurnPublicValuesStruct {
+            burner_btc_address,
+            amount,
+            is_valid,
+        } = decoded;
 
-        // println!("-------------------------------------------");
-        // println!("Burner btc address: {:?}", burner_btc_address);
-        // println!("amount: {:?}", amount);
-        // println!("is valid or not: {:?}", is_valid);
+        println!("-------------------------------------------");
+        println!("Burner btc address: {:?}", burner_btc_address);
+        println!("amount: {:?}", amount);
+        println!("is valid or not: {:?}", is_valid);
     } else {
         // Setup the program for proving.
         let (pk, vk) = client.setup(MINT_CIRCUIT_ELF);
@@ -281,7 +282,7 @@ fn main() {
         // println!("The proof is {:?}", proof.public_values.as_slice());
         // println!("Public values:{:?}", proof.public_values);
         let bytes = proof.public_values.as_slice();
-        let decoded = ZkpMintPublicValuesStruct::abi_decode(bytes, false).unwrap();
+        let decoded = ZkpMintPublicValuesStruct::abi_decode(bytes).unwrap();
         println!("The tx_id ={:?}", decoded.tx_id);
         // Verify the proof.
         client.verify(&proof, &vk).expect("failed to verify proof");

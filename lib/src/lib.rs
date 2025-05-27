@@ -1,5 +1,4 @@
 use alloy_sol_types::sol;
-use bitcoin::hashes::{hex::FromHex, sha256, sha256d};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::error::Error;
