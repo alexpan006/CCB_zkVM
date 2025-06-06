@@ -5,14 +5,14 @@ import {ISP1Verifier} from "../lib/sp1-contracts/contracts/src/ISP1Verifier.sol"
 import {ERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import {Ownable} from "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "../lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-/// @title DWBTC - Decentralized Wrapped Bitcoin
+/// @title ZKBTC - Decentralized Wrapped Bitcoin
 /// @notice This contract verifies proofs and mints/burns tokens based on verified transactions
-contract DWBTC is ERC20, Ownable, ReentrancyGuard {
+contract ZKBTC is ERC20, Ownable, ReentrancyGuard {
     address public verifier;
     bytes32 public programVKey_mint;
     bytes32 public programVKey_burn;
     uint256 public constant FEE = 100; // 1% fee in basis points (100 = 1%)
-    uint256 public constant SATOSHI_TO_DWBTC = 10**10;// Conversion factor: 1 satoshi = 10^10 DWBTC units
+    uint256 public constant SATOSHI_TO_ZKBTC = 10**10;// Conversion factor: 1 satoshi = 10^10 ZKBTC units
 
 
     address[] public stakers;
@@ -29,6 +29,9 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
     uint256 public initialMintUnlockStart;
     uint256 public initialMintUnlockEnd;
     bool public initialMinted;
+    uint256 public constant INITIAL_MINT_PER_STAKER = 1 * 1e18; // Example: 1 ZKBTC per staker
+    uint256 public constant FOREVER_LOCKED_PER_STAKER = INITIAL_MINT_PER_STAKER / 10; // Example: 10%
+    uint256 public constant INITIAL_UNLOCK_DURATION = 360 days; // Example: unlock over 180 days
 
 
     // Mapping to track processed transaction IDs
@@ -37,12 +40,12 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
     // Burn request structure
     struct BurnRequest {
         address user;
-        uint256 total_amount; // DWBTC units burned
-        uint256 dwbtcToReimburse;       // DWBTC units to reimburse operator
+        uint256 total_amount; // ZKBTC units burned
+        uint256 zkbtcToReimburse;       // ZKBTC units to reimburse operator
         uint256 exactBtcUserReceive; // satoshis operator must send to user
-        uint256 rewardOperator; // DWBTC units
-        uint256 rewardStaker; // DWBTC units
-        uint256 dust; // DWBTC units
+        uint256 rewardOperator; // ZKBTC units
+        uint256 rewardStaker; // ZKBTC units
+        uint256 dust; // ZKBTC units
         string btcAddress;
         uint256 timestamp;
         bool fulfilled;
@@ -57,7 +60,7 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
     // Reward percentages in basis points (1% = 100 basis points)
     uint256 public constant BURN_SUBMITTER_REWARD = 50; // 0.5%
     uint256 public constant BURN_STAKER_REWARD = 50; // 0.5%
-    uint256 public constant MIN_MINTING_AMOUNT = 1*SATOSHI_TO_DWBTC; // 1 satoshi
+    uint256 public constant MIN_MINTING_AMOUNT = 1*SATOSHI_TO_ZKBTC; // 1 satoshi
 
     // Events
     event ProofVerifiedAndMinted(bytes32 indexed txId, address indexed depositer, uint256 amount, bool isValid);
@@ -113,7 +116,7 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
         bytes32 _programVKey_burn,
         string memory _bridge_address,
         address[] memory _stakers
-    ) ERC20("Decentralized Wrapped Bitcoin", "DWBTC") Ownable(msg.sender) {
+    ) ERC20("Zero-Knowledge Bitcoin", "ZKBTC") Ownable(msg.sender) {
         verifier = _verifier;
         programVKey_mint = _programVKey_mint;
         programVKey_burn = _programVKey_burn;
@@ -125,34 +128,49 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
             require(s != address(0) && !isStaker[s], InitializationStakerListError());
             stakers.push(s);
             isStaker[s] = true;
-        }
-    }
-
-    function initialMint(
-    uint256 amountPerStaker,
-    uint256 foreverLockedAmount,
-    uint256 unlockDuration
-    )
-    external
-    onlyOwner
-    {
-        require(!initialMinted, "Already minted");
-        require(amountPerStaker > foreverLockedAmount, "Forever locked must be less than minted");
-        initialMinted = true;
-        initialMintUnlockStart = block.timestamp;
-        initialMintUnlockEnd = block.timestamp + unlockDuration;
-
-        for (uint256 i = 0; i < stakers.length; i++) {
-            address s = stakers[i];
-            _mint(s, amountPerStaker);
-            stakerInitialLocked[s] = amountPerStaker;
+            // Initial mint logic:
+            _mint(s, INITIAL_MINT_PER_STAKER);
+            stakerInitialLocked[s] = INITIAL_MINT_PER_STAKER;
             stakerUnlocked[s] = 0;
             stakerLastUnlockTime[s] = block.timestamp;
-            stakerForeverLocked[s] = foreverLockedAmount;
+            stakerForeverLocked[s] = FOREVER_LOCKED_PER_STAKER;
         }
+        initialMinted = true;
+        initialMintUnlockStart = block.timestamp;
+        initialMintUnlockEnd = block.timestamp + INITIAL_UNLOCK_DURATION;
     }
 
-    /// @notice Verifies a proof and mints DWBTC, deducting a fee for the staking pool
+    function unlockStakerTokens() external {
+        require(stakerInitialLocked[msg.sender] > 0, "No locked tokens");
+        uint256 foreverLocked = stakerForeverLocked[msg.sender];
+        uint256 totalLocked = stakerInitialLocked[msg.sender];
+        uint256 unlocked = stakerUnlocked[msg.sender];
+
+        uint256 unlockStart = initialMintUnlockStart;
+        uint256 unlockEnd = initialMintUnlockEnd;
+        uint256 nowTime = block.timestamp > unlockEnd ? unlockEnd : block.timestamp;
+
+        if (nowTime <= stakerLastUnlockTime[msg.sender]) return; // nothing to unlock
+
+        uint256 unlockable;
+        if (nowTime >= unlockEnd) {
+            unlockable = totalLocked - foreverLocked - unlocked;
+        } else {
+            uint256 unlockPeriod = unlockEnd - unlockStart;
+            uint256 elapsed = nowTime - stakerLastUnlockTime[msg.sender];
+            unlockable = ((totalLocked - foreverLocked) * elapsed) / unlockPeriod;
+            if (unlockable > (totalLocked - foreverLocked - unlocked)) {
+                unlockable = totalLocked - foreverLocked - unlocked;
+            }
+        }
+
+        require(unlockable > 0, "Nothing to unlock");
+        stakerUnlocked[msg.sender] += unlockable;
+        stakerLastUnlockTime[msg.sender] = nowTime;
+        // Optionally emit an event
+    }
+
+    /// @notice Verifies a proof and mints ZKBTC, deducting a fee for the staking pool
     function verifyAndMint(bytes calldata _publicValues, bytes calldata _proofBytes)
         external
         nonReentrant 
@@ -173,7 +191,7 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
 
         processedTxIds[tx_id] = true;
 
-        amount*=SATOSHI_TO_DWBTC; // Convert to DWBTC units
+        amount*=SATOSHI_TO_ZKBTC; // Convert to ZKBTC units
         require(amount >= MIN_MINTING_AMOUNT, MintingAmountTooSmall());
 
         
@@ -191,32 +209,40 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
         return (tx_id, depositer_address, userAmount, is_valid);
     }
 
-    function initiateBurn(uint256 amountRequestBurnDwbtc, string calldata btcAddress)
+    function _update(address from, address to, uint256 amount) internal override {
+        if (stakerInitialLocked[from] > 0) {
+            uint256 locked = stakerInitialLocked[from] - stakerUnlocked[from];
+            require(balanceOf(from) - amount >= locked, "Attempt to transfer locked tokens");
+        }
+        super._update(from, to, amount);
+    }
+
+    function initiateBurn(uint256 amountRequestBurnZkbtc, string calldata btcAddress)
         external
     {
-        require(balanceOf(msg.sender) >= amountRequestBurnDwbtc , BurnInsufficientBalance());
-        require(amountRequestBurnDwbtc >= MIN_MINTING_AMOUNT, BurnAmountTooSmall());
+        require(balanceOf(msg.sender) >= amountRequestBurnZkbtc , BurnInsufficientBalance());
+        require(amountRequestBurnZkbtc >= MIN_MINTING_AMOUNT, BurnAmountTooSmall());
         
 
-        uint256 feeAmount = (amountRequestBurnDwbtc * FEE) / 10000; // Calculate fee
-        uint256 dwbtcAvailable = amountRequestBurnDwbtc - feeAmount; // total amount of DWBTC that will be redeemed
+        uint256 feeAmount = (amountRequestBurnZkbtc * FEE) / 10000; // Calculate fee
+        uint256 zkbtcAvailable = amountRequestBurnZkbtc - feeAmount; // total amount of ZKBTC that will be redeemed
 
-        uint256 userSatoshi = dwbtcAvailable / SATOSHI_TO_DWBTC; // Convert to satoshis, indicating how many satoshis the user will receive in bitcoin.
+        uint256 userSatoshi = zkbtcAvailable / SATOSHI_TO_ZKBTC; // Convert to satoshis, indicating how many satoshis the user will receive in bitcoin.
 
-        uint256 actualDwbtcSent = userSatoshi * SATOSHI_TO_DWBTC; // Indicating how many wbtc the operator will get reimbursed.
-        uint256 dust = dwbtcAvailable - actualDwbtcSent;// Calculate dust (remainder that can't be converted to whole satoshis)
+        uint256 actualZkbtcSent = userSatoshi * SATOSHI_TO_ZKBTC; // Indicating how many wbtc the operator will get reimbursed.
+        uint256 dust = zkbtcAvailable - actualZkbtcSent;// Calculate dust (remainder that can't be converted to whole satoshis)
 
         // Distribute fee between operator and stakers
         uint256 operatorReward = feeAmount / 2;
         uint256 stakerReward = feeAmount - operatorReward;
 
-        _transfer(msg.sender, address(this), amountRequestBurnDwbtc);
+        _transfer(msg.sender, address(this), amountRequestBurnZkbtc);
 
         // Store the burn request with adjusted total_amount
         burnRequests[nextBurnId] = BurnRequest({
             user: msg.sender,
-            total_amount: amountRequestBurnDwbtc,        // Net DWBTC burned
-            dwbtcToReimburse: actualDwbtcSent,       // DWBTC to reimburse operator
+            total_amount: amountRequestBurnZkbtc,        // Net ZKBTC burned
+            zkbtcToReimburse: actualZkbtcSent,       // ZKBTC to reimburse operator
             exactBtcUserReceive: userSatoshi, // Exact satoshis user receives
             rewardOperator: operatorReward,
             rewardStaker: stakerReward,
@@ -257,8 +283,8 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
 
         request.fulfilled = true;
 
-        // Send escrowed DWBTC to submitter
-        _transfer(address(this), msg.sender, request.dwbtcToReimburse);
+        // Send escrowed ZKBTC to submitter
+        _transfer(address(this), msg.sender, request.zkbtcToReimburse);
         _transfer(address(this), msg.sender, request.rewardOperator); // Operator reward
         _transfer(address(this), request.user, request.dust); // Dust back to user
 
@@ -268,7 +294,7 @@ contract DWBTC is ERC20, Ownable, ReentrancyGuard {
     }
     
 
-    /// @notice Reclaims DWBTC if no proof is submitted within the period
+    /// @notice Reclaims ZKBTC if no proof is submitted within the period
     function reclaimBurn(uint256 burnId)
         external
         nonReentrant 
